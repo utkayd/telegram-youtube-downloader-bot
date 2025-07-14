@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -97,17 +98,53 @@ func handleMessage(bot *tgbotapi.BotAPI, message *tgbotapi.Message, whitelistUse
 		}
 
 		if fileInfo.Size() > 50*1024*1024 { // 50MB
-			sendMessage(bot, message.Chat.ID, "❌ Video is too large (>50MB) to send via Telegram")
-			cleanup(videoFile, videoDir)
-			return
-		}
+			sendMessage(bot, message.Chat.ID, "📹 Video is larger than 50MB, splitting into chunks...")
 
-		sendMessage(bot, message.Chat.ID, "📤 Sending video...")
+			chunks, err := splitVideo(videoFile, videoDir)
+			if err != nil {
+				log.Printf("Failed to split video: %v", err)
+				sendMessage(bot, message.Chat.ID, "❌ Error splitting video")
+				cleanup(videoFile, videoDir)
+				return
+			}
 
-		videoMsg := tgbotapi.NewVideo(message.Chat.ID, tgbotapi.FilePath(videoFile))
-		if _, err := bot.Send(videoMsg); err != nil {
-			log.Printf("Failed to send video: %v", err)
-			sendMessage(bot, message.Chat.ID, "❌ Error sending video")
+			sendMessage(bot, message.Chat.ID, fmt.Sprintf("📤 Sending %d video chunks...", len(chunks)))
+
+			for i, chunk := range chunks {
+				// Check chunk size before sending
+				chunkInfo, err := os.Stat(chunk)
+				if err != nil {
+					log.Printf("Failed to get chunk %d info: %v", i+1, err)
+					continue
+				}
+
+				if chunkInfo.Size() > 50*1024*1024 {
+					log.Printf("Chunk %d is too large (%d bytes), skipping", i+1, chunkInfo.Size())
+					sendMessage(bot, message.Chat.ID, fmt.Sprintf("⚠️ Chunk %d is too large, skipping", i+1))
+					continue
+				}
+
+				chunkMsg := tgbotapi.NewVideo(message.Chat.ID, tgbotapi.FilePath(chunk))
+				chunkMsg.Caption = fmt.Sprintf("Part %d/%d (%.1fMB)", i+1, len(chunks), float64(chunkInfo.Size())/(1024*1024))
+
+				if _, err := bot.Send(chunkMsg); err != nil {
+					log.Printf("Failed to send video chunk %d: %v", i+1, err)
+					sendMessage(bot, message.Chat.ID, fmt.Sprintf("❌ Error sending chunk %d", i+1))
+				}
+			}
+
+			// Clean up chunks
+			for _, chunk := range chunks {
+				os.Remove(chunk)
+			}
+		} else {
+			sendMessage(bot, message.Chat.ID, "📤 Sending video...")
+
+			videoMsg := tgbotapi.NewVideo(message.Chat.ID, tgbotapi.FilePath(videoFile))
+			if _, err := bot.Send(videoMsg); err != nil {
+				log.Printf("Failed to send video: %v", err)
+				sendMessage(bot, message.Chat.ID, "❌ Error sending video")
+			}
 		}
 
 		// Clean up
@@ -121,6 +158,7 @@ func isYouTubeURL(text string) bool {
 		`youtu\.be/`,
 		`youtube\.com/embed/`,
 		`youtube\.com/v/`,
+		`youtube\.com/shorts/`,
 	}
 
 	for _, pattern := range patterns {
@@ -137,6 +175,7 @@ func extractVideoID(url string) string {
 		`youtu\.be/([^?]+)`,
 		`youtube\.com/embed/([^?]+)`,
 		`youtube\.com/v/([^?]+)`,
+		`youtube\.com/shorts/([^?]+)`,
 	}
 
 	for _, pattern := range patterns {
@@ -151,8 +190,9 @@ func extractVideoID(url string) string {
 
 func downloadVideo(url, outputDir string) (string, error) {
 	cmd := exec.Command("yt-dlp",
-		"--format", "bestvideo+bestaudio",
+		"--format", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
 		"--merge-output-format", "mp4",
+		"--postprocessor-args", "ffmpeg:-c:v libx264 -profile:v baseline -level 3.0 -pix_fmt yuv420p -c:a aac",
 		"--output", filepath.Join(outputDir, "%(title)s.%(ext)s"),
 		url)
 
@@ -212,6 +252,74 @@ func isUserWhitelisted(username string, whitelistUsers []string) bool {
 	return false
 }
 
+func splitVideo(videoFile, outputDir string) ([]string, error) {
+	// Get video duration first
+	durationCmd := exec.Command("ffprobe",
+		"-v", "quiet",
+		"-show_entries", "format=duration",
+		"-of", "csv=p=0",
+		videoFile)
+
+	durationOutput, err := durationCmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get video duration: %v", err)
+	}
+
+	duration, err := strconv.ParseFloat(strings.TrimSpace(string(durationOutput)), 64)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse duration: %v", err)
+	}
+
+	// Calculate chunk duration to stay under 40MB (more conservative buffer)
+	fileInfo, _ := os.Stat(videoFile)
+	fileSizeMB := float64(fileInfo.Size()) / (1024 * 1024)
+	targetSizeMB := 40.0 // 40MB to leave more buffer for bitrate variations
+
+	chunkDuration := (duration * targetSizeMB) / fileSizeMB
+
+	// Ensure minimum chunk duration of 30 seconds to avoid too many small chunks
+	if chunkDuration < 30 {
+		chunkDuration = 30
+	}
+
+	numChunks := int(duration/chunkDuration) + 1
+
+	var chunks []string
+
+	for i := 0; i < numChunks; i++ {
+		startTime := float64(i) * chunkDuration
+		chunkFile := filepath.Join(outputDir, fmt.Sprintf("chunk_%d.mp4", i+1))
+
+		cmd := exec.Command("ffmpeg",
+			"-i", videoFile,
+			"-ss", fmt.Sprintf("%.2f", startTime),
+			"-t", fmt.Sprintf("%.2f", chunkDuration),
+			"-c:v", "libx264",
+			"-profile:v", "baseline",
+			"-level", "3.0",
+			"-pix_fmt", "yuv420p",
+			"-c:a", "aac",
+			"-movflags", "+faststart",
+			"-avoid_negative_ts", "make_zero",
+			chunkFile)
+
+		if err := cmd.Run(); err != nil {
+			// Clean up any created chunks on error
+			for _, chunk := range chunks {
+				os.Remove(chunk)
+			}
+			return nil, fmt.Errorf("failed to create chunk %d: %v", i+1, err)
+		}
+
+		// Check if chunk file was actually created and has content
+		if info, err := os.Stat(chunkFile); err == nil && info.Size() > 0 {
+			chunks = append(chunks, chunkFile)
+		}
+	}
+
+	return chunks, nil
+}
+
 func cleanup(videoFile, videoDir string) {
 	if err := os.Remove(videoFile); err != nil {
 		log.Printf("Failed to remove video file: %v", err)
@@ -224,4 +332,3 @@ func cleanup(videoFile, videoDir string) {
 		}
 	}
 }
-
