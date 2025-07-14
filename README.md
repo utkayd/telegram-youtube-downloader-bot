@@ -58,25 +58,5 @@ docker run -e TELEGRAM_BOT_TOKEN=your_token -e TELEGRAM_BOT_WHITELIST_USERS=user
 3. The bot will:
    - Extract the video ID (`abc123`)
    - Download the video using yt-dlp
-   - Send the video file back to you
-   - Clean up the downloaded file
-
-## Technical Details
-
-- **Language**: Go
-- **Framework**: go-telegram-bot-api/v5
-- **Download Tool**: yt-dlp
-- **Storage**: Temporary files in `/media/{video_id}/`
-- **File Formats**: MP4, MKV, WebM supported
-- **Size Limit**: 50MB (Telegram bot API limit)
-
-## Project Structure
-
-```
-├── main.go           # Main bot service code
-├── go.mod           # Go module dependencies
-├── Dockerfile       # Multi-stage Docker build
-├── .env.example     # Environment variable template
-├── README.md        # This file
-└── LICENSE          # License file
-```
+   - Send the video file back to you(if the downloaded file size exceeds 50mb telegram limit, it'll split the video into chunks and send it as chunks)
+   - Clean up the downloaded file(s)
