@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
@@ -61,16 +63,13 @@ func handleMessage(bot *tgbotapi.BotAPI, message *tgbotapi.Message, whitelistUse
 		return
 	}
 
-	if isYouTubeURL(message.Text) {
-		videoID := extractVideoID(message.Text)
-		if videoID == "" {
-			sendMessage(bot, message.Chat.ID, "Could not extract video ID from URL")
-			return
-		}
+	if isSupportedURL(message.Text) {
+		// Generate random hash for storage
+		randomHash := generateRandomHash()
 
 		sendMessage(bot, message.Chat.ID, "📥 Downloading video...")
 
-		videoDir := filepath.Join(MediaDir, videoID)
+		videoDir := filepath.Join(MediaDir, randomHash)
 		if err := os.MkdirAll(videoDir, 0755); err != nil {
 			log.Printf("Failed to create video directory: %v", err)
 			sendMessage(bot, message.Chat.ID, "❌ Failed to create download directory")
@@ -152,13 +151,39 @@ func handleMessage(bot *tgbotapi.BotAPI, message *tgbotapi.Message, whitelistUse
 	}
 }
 
-func isYouTubeURL(text string) bool {
+func isSupportedURL(text string) bool {
+	// Check for common video platform URLs
 	patterns := []string{
-		`youtube\.com/watch\?v=`,
+		// YouTube
+		`youtube\.com/watch`,
 		`youtu\.be/`,
 		`youtube\.com/embed/`,
 		`youtube\.com/v/`,
 		`youtube\.com/shorts/`,
+		// Instagram
+		`instagram\.com/p/`,
+		`instagram\.com/reel/`,
+		`instagram\.com/tv/`,
+		`instagram\.com/stories/`,
+		// TikTok
+		`tiktok\.com/`,
+		`vm\.tiktok\.com/`,
+		// Reddit
+		`reddit\.com/r/.*/comments/`,
+		`v\.redd\.it/`,
+		// Twitter/X
+		`twitter\.com/.*/status/`,
+		`x\.com/.*/status/`,
+		// Facebook
+		`facebook\.com/.*/videos/`,
+		`fb\.watch/`,
+		// Twitch
+		`twitch\.tv/`,
+		`clips\.twitch\.tv/`,
+		// Vimeo
+		`vimeo\.com/`,
+		// Dailymotion
+		`dailymotion\.com/video/`,
 	}
 
 	for _, pattern := range patterns {
@@ -169,23 +194,13 @@ func isYouTubeURL(text string) bool {
 	return false
 }
 
-func extractVideoID(url string) string {
-	patterns := []string{
-		`youtube\.com/watch\?v=([^&]+)`,
-		`youtu\.be/([^?]+)`,
-		`youtube\.com/embed/([^?]+)`,
-		`youtube\.com/v/([^?]+)`,
-		`youtube\.com/shorts/([^?]+)`,
+func generateRandomHash() string {
+	bytes := make([]byte, 16) // 16 bytes = 128 bits
+	if _, err := rand.Read(bytes); err != nil {
+		// Fallback to timestamp-based hash if crypto/rand fails
+		return fmt.Sprintf("%d", os.Getpid())
 	}
-
-	for _, pattern := range patterns {
-		re := regexp.MustCompile(pattern)
-		matches := re.FindStringSubmatch(url)
-		if len(matches) > 1 {
-			return matches[1]
-		}
-	}
-	return ""
+	return hex.EncodeToString(bytes)
 }
 
 func downloadVideo(url, outputDir string) (string, error) {

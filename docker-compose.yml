@@ -1,0 +1,11 @@
+---
+services:
+  telegram-youtube-bot:
+    image: utkay/telegram-youtube-downloader-bot:latest
+    container_name: telegram-youtube-bot
+    environment:
+      - TELEGRAM_BOT_TOKEN=7217875625:AAEQlrWRC6a0MtWtrDJgGIt412fbWokDsLM
+      - TELEGRAM_BOT_WHITELIST_USERS=utkayd
+    volumes:
+      - ./media:/media
+    restart: unless-stopped
