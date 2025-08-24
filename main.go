@@ -205,7 +205,7 @@ func generateRandomHash() string {
 
 func downloadVideo(url, outputDir string) (string, error) {
 	cmd := exec.Command("yt-dlp",
-		"--format", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+		"--format", "bestvideo+bestaudio/best",
 		"--merge-output-format", "mp4",
 		"--postprocessor-args", "ffmpeg:-c:v libx264 -profile:v baseline -level 3.0 -pix_fmt yuv420p -c:a aac",
 		"--output", filepath.Join(outputDir, "%(title)s.%(ext)s"),
