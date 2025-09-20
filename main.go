@@ -204,11 +204,13 @@ func generateRandomHash() string {
 }
 
 func downloadVideo(url, outputDir string) (string, error) {
+	// Generate UUID for video filename to avoid collisions and long filenames
+	videoUUID := generateRandomHash()
 	cmd := exec.Command("yt-dlp",
 		"--format", "bestvideo+bestaudio/best",
 		"--merge-output-format", "mp4",
 		"--postprocessor-args", "ffmpeg:-c:v libx264 -profile:v baseline -level 3.0 -pix_fmt yuv420p -c:a aac",
-		"--output", filepath.Join(outputDir, "%(title)s.%(ext)s"),
+		"--output", filepath.Join(outputDir, videoUUID+".%(ext)s"),
 		url)
 
 	// Log the exact command being executed
